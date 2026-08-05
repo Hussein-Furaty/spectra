@@ -26,6 +26,7 @@ export function encodeAudio(
   // ggwave.encode takes string or array, but for Uint8Array it's safer to convert or ensure it accepts Uint8Array.
   // Actually ggwave wasm wrapper usually accepts TypedArray or String.
   // If it returns F32, we expect a Float32Array back.
-  const res = ggwave.encode(instanceId, payload, protocol, 10);
+  // Using a volume of 5 (default is often 10 or 50) to make the signal softer
+  const res = ggwave.encode(instanceId, payload, protocol, 5);
   return res as Float32Array;
 }

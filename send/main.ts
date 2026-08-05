@@ -398,9 +398,9 @@ async function startStream(revealStage = false) {
       audioCtx = new AudioContext({ sampleRate: 48000 });
       let nextAudioTime = audioCtx.currentTime;
 
-      // Add a GainNode to reduce the volume and make it less annoying
+      // Add a GainNode to reduce the volume significantly
       const gainNode = audioCtx.createGain();
-      gainNode.gain.value = 0.15; // Reduce volume to 15%
+      gainNode.gain.value = 0.02; // Reduce volume to 2%
       gainNode.connect(audioCtx.destination);
 
       const scheduleAudio = () => {
