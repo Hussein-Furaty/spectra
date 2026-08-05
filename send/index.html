@@ -18,10 +18,21 @@
     </header>
     <main class="send-shell">
       <section class="tool-intro">
-        <p class="eyebrow">Screen → camera</p>
+        <p class="eyebrow" id="medium-eyebrow">Screen → camera</p>
         <h1 id="tool-title">Send a file</h1>
         <p>Nothing leaves your device until you scan with a receiver.</p>
       </section>
+
+      <div class="mode-picker" id="medium-picker" role="radiogroup" aria-label="Transfer medium">
+        <label>
+          <input type="radio" name="send-medium" value="optical" checked />
+          <span>Optical (QR)</span>
+        </label>
+        <label>
+          <input type="radio" name="send-medium" value="audio" />
+          <span>Audio (Sound)</span>
+        </label>
+      </div>
 
       <div class="mode-picker" id="mode-picker" role="radiogroup" aria-label="What to send">
         <label>

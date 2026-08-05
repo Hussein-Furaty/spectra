@@ -21,11 +21,23 @@
       <section class="receiver-primary">
         <div class="receiver-heading">
           <div>
-            <p class="eyebrow">Camera → your device</p>
+            <p class="eyebrow" id="medium-eyebrow">Camera → your device</p>
             <h1>Receive</h1>
           </div>
           <div class="hint status-line" id="stats">Ready to scan a file or text stream</div>
         </div>
+
+        <div class="mode-picker" id="medium-picker" role="radiogroup" aria-label="Transfer medium" style="margin-bottom: 2rem;">
+          <label>
+            <input type="radio" name="receive-medium" value="optical" checked />
+            <span>Optical (QR)</span>
+          </label>
+          <label>
+            <input type="radio" name="receive-medium" value="audio" />
+            <span>Audio (Sound)</span>
+          </label>
+        </div>
+
         <button id="start">Start camera</button>
         <!-- The zone exists so the toast can hang just above the camera box:
              .preview clips its children (overflow: hidden), this doesn't. -->
