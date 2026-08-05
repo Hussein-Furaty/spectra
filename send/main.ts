@@ -372,6 +372,7 @@ async function startStream(revealStage = false) {
   };
 
   let nextSeq = 0;
+  let generatorFailed = false;
 
   if (medium === "audio") {
     stage.hidden = true;
@@ -509,7 +510,6 @@ async function startStream(revealStage = false) {
     return new ImageData(new Uint8ClampedArray(raster.pixels.buffer), raster.size, raster.size);
   };
 
-  let generatorFailed = false;
   const pump = (max = LOOKAHEAD) => {
     if (generatorFailed || gen !== generation) return;
     try {
