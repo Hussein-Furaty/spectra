@@ -38,6 +38,7 @@ import {
 import { statusLine } from "../shared/status-line";
 import { requestScreenWakeLock } from "../shared/wake-lock";
 import { wireShareDialog } from "../shared/share-dialog";
+import { getGgwave, encodeAudio } from "../shared/audio";
 
 const MARGIN = 4; // quiet-zone modules
 const LOOKAHEAD = 3;
@@ -88,6 +89,7 @@ let selectedFile: {
 } | null = null;
 let generation = 0; // bumped on every restart; stale loops see it and die
 let resizeDisplay: (() => void) | null = null;
+let audioCtx: AudioContext | null = null;
 
 const specsLine = statusLine(specs);
 const setStatus = specsLine.setStatus;
@@ -109,6 +111,11 @@ function showError(message: string): void {
 
 function currentMode(): "file" | "snippet" {
   return modeInputs.find((input) => input.checked)?.value === "snippet" ? "snippet" : "file";
+}
+
+function currentMedium(): "optical" | "audio" {
+  const el = document.querySelector('input[name="send-medium"]:checked') as HTMLInputElement;
+  return (el?.value as "optical" | "audio") || "optical";
 }
 
 /** The picker reads as state — which file is armed — and the button offers
@@ -133,6 +140,10 @@ function stopTransfer(): void {
   stage.hidden = true;
   showStreamPanels(false);
   cfgFile.value = "";
+  if (audioCtx) {
+    audioCtx.close();
+    audioCtx = null;
+  }
   updateFilePicker();
   setStatus("Choose a file to begin");
 }
@@ -292,6 +303,10 @@ async function main() {
     for (const input of modeInputs) input.addEventListener("change", applyMode);
   }
   applyMode();
+  const mediumInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="send-medium"]')];
+  for (const input of mediumInputs) input.addEventListener("change", () => {
+    stopTransfer();
+  });
   window.addEventListener("resize", () => resizeDisplay?.());
   for (const el of [cfgFps, cfgBytes, cfgEcc, cfgSize]) {
     el.addEventListener("change", () => void startStream());
@@ -321,8 +336,10 @@ async function startStream(revealStage = false) {
   }
   const { name, size: fileSize, payload, compression, transmittedSize } = selectedFile;
   if (gen !== generation) return; // superseded while fetching
+  const medium = currentMedium();
+  
   const txFps = Number(cfgFps.value);
-  const frameBytes = Number(cfgBytes.value);
+  const frameBytes = medium === "audio" ? 32 : Number(cfgBytes.value);
   const ecc = cfgEcc.value as "L" | "M" | "Q" | "H";
   const displayPx = Number(cfgSize.value);
 
@@ -354,12 +371,76 @@ async function startStream(revealStage = false) {
     payloadFnv: fnv1a(payload),
   };
 
+  let nextSeq = 0;
+
+  if (medium === "audio") {
+    stage.hidden = true;
+    showStreamPanels(true);
+    spec("spec-fps").textContent = `audio`;
+    spec("spec-frame").textContent = `${frameBytes} bytes`;
+    spec("spec-qr").textContent = `Ultrasound`;
+    spec("spec-payload").textContent = `${name} · ${formatBytes(fileSize)}`;
+    spec("spec-compression").textContent =
+      compression === "gzip" ? `gzip → ${formatBytes(transmittedSize)}` : "none";
+    spec("spec-k").textContent = `K = ${encoder.k}`;
+    setStatus(`Streaming ${name} over sound — `);
+
+    const share = document.createElement("button");
+    share.type = "button";
+    share.className = "text-button";
+    share.textContent = "Share receiver link";
+    share.addEventListener("click", openShareDialog);
+    specs.append(share);
+
+    getGgwave().then(({ ggwave, instanceId }) => {
+      if (gen !== generation) return;
+      audioCtx = new AudioContext({ sampleRate: 48000 });
+      let nextAudioTime = audioCtx.currentTime;
+
+      const scheduleAudio = () => {
+        if (gen !== generation || generatorFailed) return;
+        const now = audioCtx!.currentTime;
+        while (nextAudioTime < now + 0.5) {
+          try {
+            const bytes = packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq));
+            nextSeq++;
+            const audioData = encodeAudio(
+              ggwave,
+              instanceId,
+              bytes,
+              ggwave.ProtocolId.GGWAVE_PROTOCOL_ULTRASOUND_FAST
+            );
+            const buffer = audioCtx!.createBuffer(1, audioData.length, 48000);
+            buffer.getChannelData(0).set(audioData);
+            const source = audioCtx!.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx!.destination);
+            
+            if (nextAudioTime < now) nextAudioTime = now;
+            source.start(nextAudioTime);
+            nextAudioTime += buffer.duration;
+          } catch (err) {
+            generatorFailed = true;
+            showError(err instanceof Error ? err.message : String(err));
+            break;
+          }
+        }
+        if (!generatorFailed && gen === generation) {
+          setTimeout(scheduleAudio, 100);
+        }
+      };
+      scheduleAudio();
+    }).catch(err => {
+      showError(err instanceof Error ? err.message : String(err));
+    });
+    return;
+  }
+
   let version: number | undefined; // locked after the first frame
   let modules = 0;
   let scale = 1;
   const staging = document.createElement("canvas");
   const queue: ImageData[] = [];
-  let nextSeq = 0;
   stage.hidden = false;
 
   const sizeCanvas = () => {
@@ -367,9 +448,6 @@ async function startStream(revealStage = false) {
     const total = modules + 2 * MARGIN;
     let cssBudget: number;
     if (document.body.classList.contains("qr-full")) {
-      // Tap-to-fullscreen: the whole short viewport edge. The display-size
-      // slider and page chrome are deliberately ignored — the point of the
-      // mode is "as big as this device goes".
       cssBudget = Math.min(window.innerWidth, window.innerHeight);
     } else {
       const containerWidth =
@@ -410,11 +488,7 @@ async function startStream(revealStage = false) {
       modules = qr.modules.size;
       sizeCanvas();
       resizeDisplay = sizeCanvas;
-      // Scroll only now: before sizeCanvas() the canvas is still 16×16, so the
-      // scroll target would be the wrong height.
       if (revealStage) scrollStageIntoView();
-      // The stream's parameters live at the bottom of Transfer settings, next
-      // to the knobs that produced them; the status line stays for prose.
       spec("spec-fps").textContent = `${txFps} fps`;
       spec("spec-frame").textContent = `${frameBytes} bytes`;
       spec("spec-qr").textContent = `V${version} · ECC ${ecc}`;
@@ -423,9 +497,6 @@ async function startStream(revealStage = false) {
         compression === "gzip" ? `gzip → ${formatBytes(transmittedSize)}` : "none";
       spec("spec-k").textContent = `K = ${encoder.k}`;
       showStreamPanels(true);
-      // The tail of the status line is the door to the share dialog. Built by
-      // hand because setStatus is textContent-only — and the next setStatus
-      // wiping the button out is exactly right.
       setStatus(`Streaming ${name} — `);
       const share = document.createElement("button");
       share.type = "button";
@@ -438,22 +509,12 @@ async function startStream(revealStage = false) {
     return new ImageData(new Uint8ClampedArray(raster.pixels.buffer), raster.size, raster.size);
   };
 
-  /**
-   * Refill the lookahead, generating at most `max` frames per call.
-   *
-   * Called once up front to fill the queue, then once per tick() — the only
-   * thing that drains it. Self-scheduling on `setTimeout(pump, 0)` instead cost
-   * ~250 wake-ups a second doing nothing once the queue was full. Capping at
-   * one frame per tick keeps the amortisation that gave us: a rAF callback
-   * never pays for more than the single frame it just consumed.
-   */
   let generatorFailed = false;
   const pump = (max = LOOKAHEAD) => {
     if (generatorFailed || gen !== generation) return;
     try {
       for (let n = 0; n < max && queue.length < LOOKAHEAD; n++) queue.push(makeFrame());
     } catch (err) {
-      // e.g. frame bytes over capacity for the chosen ECC level
       generatorFailed = true;
       showError(err instanceof Error ? err.message : String(err));
     }
@@ -463,8 +524,6 @@ async function startStream(revealStage = false) {
   const interval = 1000 / txFps;
   let nextAt = performance.now();
   const tick = (now: number) => {
-    // generatorFailed means no frame will ever be produced again, so stop the
-    // rAF loop rather than spinning on an empty queue until a settings change.
     if (gen !== generation || generatorFailed) return;
     requestAnimationFrame(tick);
     if (now < nextAt) return;

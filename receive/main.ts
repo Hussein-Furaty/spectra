@@ -34,6 +34,7 @@ import { statusLine } from "../shared/status-line";
 import { requestScreenWakeLock } from "../shared/wake-lock";
 import { applyAdvancedConstraint, probeCameraCapabilities } from "../shared/platform";
 import { closeOnBackdropClick } from "../shared/dialog";
+import { getGgwave } from "../shared/audio";
 
 const startBtn = document.getElementById("start") as HTMLButtonElement;
 const video = document.getElementById("video") as HTMLVideoElement;
@@ -77,6 +78,14 @@ let captureGen = 0;
 let done = false;
 let settingsWired = false;
 let statsTimer: ReturnType<typeof setInterval> | undefined;
+
+let audioCtx: AudioContext | null = null;
+let scriptProcessor: ScriptProcessorNode | null = null;
+
+function currentMedium(): "optical" | "audio" {
+  const el = document.querySelector('input[name="receive-medium"]:checked') as HTMLInputElement;
+  return (el?.value as "optical" | "audio") || "optical";
+}
 
 const noSignal = new NoSignalHintTimer(NO_SIGNAL_FIRST_MS, NO_SIGNAL_DISMISSED_MS);
 const pool = new DecodeWorkerPool(createDecodeWorker, (bytes) => onDecoded(bytes));
@@ -156,10 +165,55 @@ async function start() {
     );
     return;
   }
+  const medium = currentMedium();
+
+  if (medium === "audio") {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (err) {
+      const denied = err instanceof DOMException && err.name === "NotAllowedError";
+      offerRetry(denied ? "microphone permission denied." : `microphone: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    startBtn.style.display = "none";
+    preview.style.display = "none";
+    metricsEl.style.display = "grid";
+    if (diagnosticsEl) diagnosticsEl.style.display = "block";
+    setStatus("Microphone listening — searching for a stream…");
+
+    try {
+      const { ggwave, instanceId } = await getGgwave();
+      audioCtx = new AudioContext({ sampleRate: 48000 });
+      const source = audioCtx.createMediaStreamSource(stream);
+      scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+      scriptProcessor.onaudioprocess = (e) => {
+        if (done) return;
+        captureTimes.push(performance.now());
+        const inputData = e.inputBuffer.getChannelData(0);
+        const decoded = ggwave.decode(instanceId, inputData);
+        if (decoded && decoded.length > 0) {
+          onDecoded(decoded as Uint8Array);
+        }
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioCtx.destination);
+    } catch (err) {
+      showError(`audio init failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    noSignal.cameraStarted(performance.now());
+    captureGen++;
+    statsTimer = setInterval(updateStats, 500);
+    await requestScreenWakeLock();
+    return;
+  }
+
   const captureWidth = Number(cfgWidth.value);
   const captureFps = Number(cfgCapFps.value);
-  // Nothing on the page changes until the camera is actually running: the
-  // error paths below all have to leave a usable Start button behind.
   startBtn.disabled = true;
   startBtn.textContent = "Starting…";
   const base: MediaTrackConstraints = {
@@ -190,7 +244,6 @@ async function start() {
   }
 
   startBtn.style.display = "none";
-  // "": back to the stylesheet's flex — the zone centers the camera box.
   preview.style.display = "";
   metricsEl.style.display = "grid";
   if (diagnosticsEl) diagnosticsEl.style.display = "block";
@@ -381,6 +434,14 @@ async function finish(container: Uint8Array, hashOk: boolean, seconds: number) {
   // decode pool. Each worker holds its own ~940 KB zxing WASM instance, which
   // is worth reclaiming on a phone the moment the last frame is in.
   stream?.getTracks().forEach((t) => t.stop());
+  if (scriptProcessor) {
+    scriptProcessor.disconnect();
+    scriptProcessor = null;
+  }
+  if (audioCtx) {
+    audioCtx.close();
+    audioCtx = null;
+  }
   clearInterval(statsTimer);
   statsTimer = undefined;
   pool.resize(0);
