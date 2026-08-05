@@ -9,3 +9,8 @@ declare module "virtual:zxing-wasm-data-url" {
   const dataUrl: string;
   export default dataUrl;
 }
+
+declare module "ggwave" {
+  const factory: () => Promise<any>;
+  export default factory;
+}

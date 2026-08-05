@@ -21,3 +21,6 @@ export const FRAME_BYTES_OPTIONS: readonly number[] = [
   2331,
   DEFAULT_FRAME_BYTES,
 ];
+
+export const AUDIO_FRAME_BYTES_OPTIONS: readonly number[] = [16, 32, 64, 128];
+export const DEFAULT_AUDIO_FRAME_BYTES = 32;
