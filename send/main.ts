@@ -398,6 +398,11 @@ async function startStream(revealStage = false) {
       audioCtx = new AudioContext({ sampleRate: 48000 });
       let nextAudioTime = audioCtx.currentTime;
 
+      // Add a GainNode to reduce the volume and make it less annoying
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = 0.15; // Reduce volume to 15%
+      gainNode.connect(audioCtx.destination);
+
       const scheduleAudio = () => {
         if (gen !== generation || generatorFailed) return;
         const now = audioCtx!.currentTime;
@@ -415,7 +420,7 @@ async function startStream(revealStage = false) {
             buffer.getChannelData(0).set(audioData);
             const source = audioCtx!.createBufferSource();
             source.buffer = buffer;
-            source.connect(audioCtx!.destination);
+            source.connect(gainNode); // connect to gain node instead of destination
             
             if (nextAudioTime < now) nextAudioTime = now;
             source.start(nextAudioTime);
